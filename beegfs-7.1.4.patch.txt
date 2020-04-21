@@ -1,0 +1,501 @@
+diff -ru -X diff-ignore orig/build/Makefile client_module_7/build/Makefile
+--- orig/build/Makefile	2020-04-15 15:06:50.683271070 +0100
++++ client_module_7/build/Makefile	2020-04-15 17:13:56.532206176 +0100
+@@ -134,7 +134,7 @@
+ endif
+ 
+ 	@echo "Building beegfs client module"
+-	$(MAKE) -C $(KDIR_PRUNED_HEAD) SUBDIRS=$(BEEGFS_BUILDDIR)/../source \
++	$(MAKE) V=1 -C $(KDIR_PRUNED_HEAD) M=$(BEEGFS_BUILDDIR)/../source \
+ 	"EXTRA_CFLAGS=$(BEEGFS_CFLAGS)" modules
+ 
+ 	@cp ../source/$(TARGET).ko .
+diff -ru -X diff-ignore orig/source/common/Common.h client_module_7/source/common/Common.h
+--- orig/source/common/Common.h	2020-04-15 15:06:50.720271730 +0100
++++ client_module_7/source/common/Common.h	2020-04-15 17:13:54.943177923 +0100
+@@ -152,15 +152,15 @@
+ #endif
+ 
+ #if defined(KERNEL_HAS_64BIT_TIMESTAMPS)
+-static inline struct timespec64 current_fs_time(struct super_block *sb)
++static inline struct timespec64 current_fs_time(struct inode *inode)
+ {
+-   struct timespec64 now = current_kernel_time64();
+-   return timespec64_trunc(now, sb->s_time_gran);
++   struct timespec64 now; ktime_get_coarse_real_ts64(&now);
++   return timestamp_truncate(now, inode);
+ }
+ #elif !defined(KERNEL_HAS_CURRENT_FS_TIME)
+-static inline struct timespec current_fs_time(struct super_block *sb)
++static inline struct timespec64 current_fs_time(struct inode *inode)
+ {
+-   struct timespec now = current_kernel_time();
++   struct timespec now; ktime_get_coarse_real_ts64(&now);
+    return timespec_trunc(now, sb->s_time_gran);
+ }
+ #endif
+diff -ru -X diff-ignore orig/source/common/FhgfsTypes.h client_module_7/source/common/FhgfsTypes.h
+--- orig/source/common/FhgfsTypes.h	2020-04-15 15:06:50.722271766 +0100
++++ client_module_7/source/common/FhgfsTypes.h	2020-04-15 17:13:54.945177959 +0100
+@@ -21,9 +21,9 @@
+    gid_t gid;
+    loff_t size;
+    uint64_t blocks;
+-   struct timespec atime;
+-   struct timespec mtime;
+-   struct timespec ctime; // attrib change time (not creation time)
++   struct timespec64 atime;
++   struct timespec64 mtime;
++   struct timespec64 ctime; // attrib change time (not creation time)
+ };
+ typedef struct fhgfs_stat fhgfs_stat;
+ 
+diff -ru -X diff-ignore orig/source/common/net/sock/StandardSocket.c client_module_7/source/common/net/sock/StandardSocket.c
+--- orig/source/common/net/sock/StandardSocket.c	2020-04-15 15:06:51.055277710 +0100
++++ client_module_7/source/common/net/sock/StandardSocket.c	2020-04-15 17:13:55.273183788 +0100
+@@ -38,7 +38,7 @@
+ #endif
+ 
+ #ifndef __wake_up_sync_key
+-# define __wake_up_sync_key(wq, state, n, key) __wake_up_sync(wq, state, n)
++# define __wake_up_sync_key(wq, state, n, key) __wake_up_sync(wq, state)
+ #endif
+ 
+ /* unlike linux sock_def_readable, this will also wake TASK_KILLABLE threads. we need this
+diff -ru -X diff-ignore orig/source/common/net/sock/ibv/IBVSocket.c client_module_7/source/common/net/sock/ibv/IBVSocket.c
+--- orig/source/common/net/sock/ibv/IBVSocket.c	2020-04-15 15:06:51.067277924 +0100
++++ client_module_7/source/common/net/sock/ibv/IBVSocket.c	2020-04-15 17:13:55.285184003 +0100
+@@ -708,22 +708,22 @@
+ 
+    if(commContext->sendCQ)
+    {
+-      int destroyRes = ib_destroy_cq(commContext->sendCQ);
+-      if (unlikely(destroyRes) )
+-      {
+-         ibv_pwarn("sendCQ destroy failed: %d\n", destroyRes);
+-         dump_stack();
+-      }
++      ib_destroy_cq(commContext->sendCQ);
++      // if (unlikely(destroyRes) )
++      // {
++         // ibv_pwarn("sendCQ destroy failed: %d\n", destroyRes);
++         // dump_stack();
++      // }
+    }
+ 
+    if(commContext->recvCQ)
+    {
+-      int destroyRes = ib_destroy_cq(commContext->recvCQ);
+-      if (unlikely(destroyRes) )
+-      {
+-         ibv_pwarn("recvCQ destroy failed: %d\n", destroyRes);
+-         dump_stack();
+-      }
++      ib_destroy_cq(commContext->recvCQ);
++      // if (unlikely(destroyRes) )
++      // {
++         // ibv_pwarn("recvCQ destroy failed: %d\n", destroyRes);
++         // dump_stack();
++      // }
+    }
+ 
+    IBVBuffer_free(&commContext->checkConBuffer, commContext);
+diff -ru -X diff-ignore orig/source/common/toolkit/Time.h client_module_7/source/common/toolkit/Time.h
+--- orig/source/common/toolkit/Time.h	2020-04-15 15:06:51.257281315 +0100
++++ client_module_7/source/common/toolkit/Time.h	2020-04-15 17:13:55.463187168 +0100
+@@ -26,7 +26,7 @@
+  */
+ struct Time
+ {
+-   struct timespec now;
++   struct timespec64 now;
+ };
+ 
+ 
+@@ -35,7 +35,7 @@
+  */
+ void Time_init(Time* this)
+ {
+-   ktime_get_ts(&this->now);
++   ktime_get_ts64(&this->now);
+ }
+ 
+ /**
+@@ -48,7 +48,7 @@
+ 
+ void Time_setToNow(Time* this)
+ {
+-   ktime_get_ts(&this->now);
++   ktime_get_ts64(&this->now);
+ }
+ 
+ 
+diff -ru -X diff-ignore orig/source/common/toolkit/TimeAbs.c client_module_7/source/common/toolkit/TimeAbs.c
+--- orig/source/common/toolkit/TimeAbs.c	2020-04-15 15:06:51.258281333 +0100
++++ client_module_7/source/common/toolkit/TimeAbs.c	2020-04-15 17:13:55.466187222 +0100
+@@ -4,9 +4,9 @@
+ 
+ void TimeAbs_init(TimeAbs* this)
+ {
+-   struct timeval now;
+-   do_gettimeofday(&now);
++   struct timespec64 now;
++   ktime_get_real_ts64(&now);
+ 
+    this->now.tv_sec = now.tv_sec;
+-   this->now.tv_usec = now.tv_usec;
++   this->now.tv_nsec = now.tv_nsec;
+ }
+diff -ru -X diff-ignore orig/source/common/toolkit/TimeAbs.h client_module_7/source/common/toolkit/TimeAbs.h
+--- orig/source/common/toolkit/TimeAbs.h	2020-04-15 15:06:51.260281369 +0100
++++ client_module_7/source/common/toolkit/TimeAbs.h	2020-04-15 17:13:55.467187239 +0100
+@@ -11,7 +11,7 @@
+ extern void TimeAbs_init(TimeAbs* this);
+ 
+ // getters & setters
+-static inline struct timeval* TimeAbs_getTimeval(TimeAbs* this);
++static inline struct timespec64* TimeAbs_getTimeval(TimeAbs* this);
+ 
+ /**
+  * This time class is based on a non-monotonic clock. Use the Time class instead of this one,
+@@ -19,11 +19,11 @@
+  */
+ struct TimeAbs
+ {
+-   struct timeval now;
++   struct timespec64 now;
+ };
+ 
+ 
+-struct timeval* TimeAbs_getTimeval(TimeAbs* this)
++struct timespec64* TimeAbs_getTimeval(TimeAbs* this)
+ {
+    return &this->now;
+ }
+diff -ru -X diff-ignore orig/source/filesystem/FhgfsOpsFile.c client_module_7/source/filesystem/FhgfsOpsFile.c
+--- orig/source/filesystem/FhgfsOpsFile.c	2020-04-15 15:06:51.382283547 +0100
++++ client_module_7/source/filesystem/FhgfsOpsFile.c	2020-04-15 17:13:55.595189516 +0100
+@@ -301,7 +301,7 @@
+       FhgfsOpsHelper_logOp(5, app, dentry, inode, logContext);
+ 
+    // check user buffer
+-   if(unlikely(!access_ok(VERIFY_WRITE, buf, size) ) )
++   if(unlikely(!access_ok(buf, size) ) )
+       return -EFAULT;
+ 
+    FhgfsInode_entryInfoReadLock(fhgfsInode); // LOCK EntryInfo
+Only in client_module_7/source/filesystem: FhgfsOpsFile.c.rej
+diff -ru -X diff-ignore orig/source/filesystem/FhgfsOpsInode.c client_module_7/source/filesystem/FhgfsOpsInode.c
+--- orig/source/filesystem/FhgfsOpsInode.c	2020-04-15 15:06:51.398283833 +0100
++++ client_module_7/source/filesystem/FhgfsOpsInode.c	2020-04-15 17:13:55.675190939 +0100
+@@ -917,7 +917,7 @@
+    { // remote success => create the local inode
+       retVal = __FhgfsOps_instantiateInode(dentry, &newEntryInfo, NULL, &iSizeHints);
+ 
+-      dir->i_ctime = dir->i_mtime = current_fs_time(sb);
++      dir->i_ctime = dir->i_mtime = current_fs_time(dentry->d_inode);
+    }
+ 
+    FileEvent_uninit(&event);
+@@ -966,7 +966,7 @@
+    { // remote success
+       clear_nlink(dentry->d_inode);
+ 
+-      dir->i_ctime = dir->i_mtime = current_fs_time(sb);
++      dir->i_ctime = dir->i_mtime = current_fs_time(dentry->d_inode);
+    }
+ 
+ 
+@@ -1099,7 +1099,7 @@
+       lookupOutInfo.fhgfsStat, &iSizeHints);
+    LookupIntentInfoOut_setEntryInfoPtr(&lookupOutInfo, NULL); /* Make sure entryInfo will not be
+                                                          *  de-initialized */
+-   dir->i_ctime = dir->i_mtime = current_fs_time(sb);
++   dir->i_ctime = dir->i_mtime = current_fs_time(dentry->d_inode);
+ 
+ #ifndef KERNEL_HAS_ATOMIC_OPEN
+    if (lookupOutInfo.openRes == FhgfsOpsErr_SUCCESS)
+@@ -1317,7 +1317,7 @@
+ 
+          if (lookupOutInfo.lookupRes != FhgfsOpsErr_SUCCESS)
+          {  // only update directory time stamps if the file did not exist yet
+-            dir->i_ctime = dir->i_mtime = current_fs_time(sb);
++            dir->i_ctime = dir->i_mtime = current_fs_time(inode);
+          }
+       }
+       else
+@@ -1479,7 +1479,7 @@
+    }
+    else
+    { // remote success
+-      dir->i_ctime = dir->i_mtime = current_fs_time(sb);
++      dir->i_ctime = dir->i_mtime = current_fs_time(dentry->d_inode);
+ 
+       if(dentry->d_inode)
+       {
+@@ -1552,7 +1552,7 @@
+ 
+    retVal = __FhgfsOps_instantiateInode(dentry, &newEntryInfo, NULL, &iSizeHints);
+ 
+-   dir->i_ctime = dir->i_mtime = current_fs_time(sb);
++   dir->i_ctime = dir->i_mtime = current_fs_time(dentry->d_inode);
+ 
+    FileEvent_uninit(&event);
+ 
+@@ -1616,7 +1616,7 @@
+    { // remote success => create local inode
+       retVal = __FhgfsOps_instantiateInode(dentry, &newEntryInfo, NULL, &iSizeHints);
+ 
+-      dir->i_ctime = dir->i_mtime = current_fs_time(sb);
++      dir->i_ctime = dir->i_mtime = current_fs_time(dentry->d_inode);
+    }
+ 
+ 
+@@ -1837,7 +1837,7 @@
+    { // remote success => create local inode
+       retVal = __FhgfsOps_instantiateInode(newDentry, &newEntryInfo, NULL, &iSizeHints);
+ 
+-      dir->i_ctime = dir->i_mtime = current_fs_time(sb);
++      dir->i_ctime = dir->i_mtime = current_fs_time(newDentry->d_inode);
+    }
+ 
+    // clean-up
+@@ -2040,7 +2040,7 @@
+    else
+    { // remote success
+       fromEntryInode->i_ctime = inodeDirFrom->i_ctime = inodeDirFrom->i_mtime =
+-         inodeDirTo->i_ctime = inodeDirTo->i_mtime = current_fs_time(sb);
++         inodeDirTo->i_ctime = inodeDirTo->i_mtime = current_fs_time(fromEntryInode);
+ 
+       FhgfsInode_updateEntryInfoOnRenameUnlocked(fhgfsFromEntryInode, toDirInfo, newName);
+    }
+@@ -2498,7 +2498,7 @@
+    FhgfsOpsErr statRes;
+    FhgfsInode* fhgfsInode = BEEGFS_INODE(inode);
+ 
+-   time_t oldMTime;
++   struct timespec64 oldMTime;
+    loff_t oldSize;
+    unsigned cacheElapsedMS;
+    bool mtimeSizeInvalidate;
+@@ -2581,7 +2581,7 @@
+ 
+    spin_lock(&inode->i_lock); // I _ L O C K
+ 
+-   oldMTime = inode->i_mtime.tv_sec;
++   oldMTime.tv_sec = inode->i_mtime.tv_sec;
+    oldSize = i_size_read(inode);
+ 
+    __FhgfsOps_applyStatDataToInodeUnlocked(&kstat, iSizeHints, inode);
+@@ -2589,7 +2589,7 @@
+    // compare previous size/mtime to detect modifications by other clients
+ 
+    mtimeSizeInvalidate =
+-      (inode->i_mtime.tv_sec != oldMTime) || (i_size_read(inode) != oldSize);
++      (inode->i_mtime.tv_sec != oldMTime.tv_sec) || (i_size_read(inode) != oldSize);
+    cacheElapsedMS = Time_elapsedMS(&fhgfsInode->dataCacheTime);
+    timeoutInvalidate = cacheElapsedMS > Config_getTunePageCacheValidityMS(cfg);
+ 
+diff -ru -X diff-ignore orig/source/filesystem/FhgfsOpsIoctl.c client_module_7/source/filesystem/FhgfsOpsIoctl.c
+--- orig/source/filesystem/FhgfsOpsIoctl.c	2020-04-15 15:06:51.403283921 +0100
++++ client_module_7/source/filesystem/FhgfsOpsIoctl.c	2020-04-15 17:13:55.614189852 +0100
+@@ -194,7 +194,7 @@
+       return -EINVAL;
+    }
+ 
+-   if(!access_ok(VERIFY_WRITE, confFile, sizeof(*confFile) ) )
++   if(!access_ok(confFile, sizeof(*confFile) ) )
+    {
+       Logger_logFormatted(log, Log_DEBUG, logContext, "access_ok() denied to write to conf_file");
+       return -EINVAL;
+@@ -230,7 +230,7 @@
+    int cpRes;
+    int cfgFileStrLen;
+ 
+-   if(!access_ok(VERIFY_WRITE, confFile, sizeof(*confFile) ) )
++   if(!access_ok(confFile, sizeof(*confFile) ) )
+    {
+       Logger_logFormatted(log, Log_DEBUG, logContext, "access_ok() denied to write to conf_file");
+       vfree(fileName);
+Only in client_module_7/source/filesystem: FhgfsOpsIoctl.c.rej
+diff -ru -X diff-ignore orig/source/filesystem/FhgfsOpsSuper.c client_module_7/source/filesystem/FhgfsOpsSuper.c
+--- orig/source/filesystem/FhgfsOpsSuper.c	2020-04-15 15:06:51.413284100 +0100
++++ client_module_7/source/filesystem/FhgfsOpsSuper.c	2020-04-15 17:13:55.625190050 +0100
+@@ -281,7 +281,8 @@
+    sb->s_magic = BEEGFS_MAGIC;
+    sb->s_op = &fhgfs_super_ops;
+    sb->s_time_gran = 1000000000; // granularity of c/m/atime in ns
+-   sb->s_flags |= MS_NODIRATIME;
++   // Not sure about this one // sb->s_flags |= MS_NODIRATIME; 
++   sb->s_flags |= SB_NODIRATIME;
+ 
+    if (Config_getSysXAttrsEnabled(cfg ) )
+       sb->s_xattr = fhgfs_xattr_handlers_noacl; // handle only user xattrs
+@@ -318,7 +319,8 @@
+ 
+    kstat.ino = BEEGFS_INODE_ROOT_INO;
+    kstat.mode = S_IFDIR | 0777; // allow access for everyone
+-   kstat.atime = kstat.mtime = kstat.ctime = current_fs_time(sb);
++   // Can't see that this affects anything
++   // kstat.atime = kstat.mtime = kstat.ctime = current_fs_time(sb);
+    kstat.uid = current_fsuid();
+    kstat.gid = current_fsgid();
+    kstat.blksize = Config_getTuneInodeBlockSize(cfg);
+diff -ru -X diff-ignore orig/source/filesystem/ProcFs.c client_module_7/source/filesystem/ProcFs.c
+--- orig/source/filesystem/ProcFs.c	2020-04-15 15:06:51.433284457 +0100
++++ client_module_7/source/filesystem/ProcFs.c	2020-04-15 17:13:55.669190830 +0100
+@@ -25,17 +25,17 @@
+ /**
+  * Initializer for read-only proc file ops
+  */
+-#define BEEGFS_PROC_FOPS_INITIALIZER  \
+-   .open    = __ProcFs_open,         \
+-   .read    = seq_read,              \
+-   .llseek  = seq_lseek,             \
+-   .release = single_release
++#define BEEGFS_PROC_FOPS_INITIALIZER \
++    .proc_open    = __ProcFs_open,   \
++    .proc_read    = seq_read,        \
++    .proc_lseek   = seq_lseek,       \
++    .proc_release = single_release
+ 
+ 
+ /**
+  * generic file ops for procfs entries
+  */
+-static const struct file_operations fhgfs_proc_fops =
++static const struct proc_ops fhgfs_proc_fops =
+ {
+    BEEGFS_PROC_FOPS_INITIALIZER
+ };
+@@ -73,7 +73,7 @@
+    char name[32]; // filename
+    int (*show)(struct seq_file *, void *); // the show method of this file
+    //ssize_t (*write)(struct file *, const char __user *, size_t, loff_t *); // the write method
+-   struct file_operations proc_fops;
++   struct proc_ops proc_fops;
+ };
+ 
+ /**
+@@ -87,30 +87,30 @@
+    { BEEGFS_PROC_ENTRY_RETRIESENABLED, &__ProcFs_readV2_connRetriesEnabled,
+       {
+          BEEGFS_PROC_FOPS_INITIALIZER,
+-         .write   = &__ProcFs_writeV2_connRetriesEnabled,
++         .proc_write   = &__ProcFs_writeV2_connRetriesEnabled,
+       },
+    },
+    { BEEGFS_PROC_ENTRY_NETBENCHENABLED, &__ProcFs_readV2_netBenchModeEnabled,
+       {
+          BEEGFS_PROC_FOPS_INITIALIZER,
+-         .write   = &__ProcFs_writeV2_netBenchModeEnabled,
++         .proc_write   = &__ProcFs_writeV2_netBenchModeEnabled,
+       },
+    },
+    { BEEGFS_PROC_ENTRY_DROPCONNS, &__ProcFs_readV2_nothing,
+       {
+          BEEGFS_PROC_FOPS_INITIALIZER,
+-         .write   = &__ProcFs_writeV2_dropConns,
++         .proc_write   = &__ProcFs_writeV2_dropConns,
+       },
+    },
+    { BEEGFS_PROC_ENTRY_LOGLEVELS, &__ProcFs_readV2_logLevels,
+       {
+          BEEGFS_PROC_FOPS_INITIALIZER,
+-         .write   = &__ProcFs_writeV2_logLevels,
++         .proc_write   = &__ProcFs_writeV2_logLevels,
+       },
+    },
+    { "", NULL,
+       {
+-        .open = NULL,
++        .proc_open = NULL,
+       },
+    } // last element must be empty (for loop termination)
+ };
+@@ -465,7 +465,7 @@
+    App* app = __ProcFs_getProcParentDirEntryDataField(procInode); // (app is ->data in parent dir)
+ 
+    // check user buffer
+-   if(unlikely(!access_ok(VERIFY_READ, buf, count) ) )
++   if(unlikely(!access_ok(buf, count) ) )
+       return -EFAULT;
+ 
+    return ProcFsHelper_write_connRetriesEnabled(buf, count, app);
+@@ -478,7 +478,7 @@
+    unsigned long count, void* data)
+ {
+    // check user buffer
+-   if(unlikely(!access_ok(VERIFY_READ, buf, count) ) )
++   if(unlikely(!access_ok(buf, count) ) )
+       return -EFAULT;
+ 
+    return ProcFsHelper_write_connRetriesEnabled(buf, count, (App*)data);
+@@ -507,7 +507,7 @@
+    App* app = __ProcFs_getProcParentDirEntryDataField(procInode); // (app is ->data in parent dir)
+ 
+    // check user buffer
+-   if(unlikely(!access_ok(VERIFY_READ, buf, count) ) )
++   if(unlikely(!access_ok(buf, count) ) )
+       return -EFAULT;
+ 
+    return ProcFsHelper_write_netBenchModeEnabled(buf, count, app);
+@@ -520,7 +520,7 @@
+    unsigned long count, void* data)
+ {
+    // check user buffer
+-   if(unlikely(!access_ok(VERIFY_READ, buf, count) ) )
++   if(unlikely(!access_ok(buf, count) ) )
+       return -EFAULT;
+ 
+    return ProcFsHelper_write_netBenchModeEnabled(buf, count, (App*)data);
+@@ -533,7 +533,7 @@
+    App* app = __ProcFs_getProcParentDirEntryDataField(procInode); // (app is ->data in parent dir)
+ 
+    // check user buffer
+-   if(unlikely(!access_ok(VERIFY_READ, buf, count) ) )
++   if(unlikely(!access_ok(buf, count) ) )
+       return -EFAULT;
+ 
+    return ProcFsHelper_write_dropConns(buf, count, app);
+@@ -546,7 +546,7 @@
+    unsigned long count, void* data)
+ {
+    // check user buffer
+-   if(unlikely(!access_ok(VERIFY_READ, buf, count) ) )
++   if(unlikely(!access_ok(buf, count) ) )
+       return -EFAULT;
+ 
+    return ProcFsHelper_write_dropConns(buf, count, (App*)data);
+@@ -575,7 +575,7 @@
+    App* app = __ProcFs_getProcParentDirEntryDataField(procInode); // (app is ->data in parent dir)
+ 
+    // check user buffer
+-   if(unlikely(!access_ok(VERIFY_READ, buf, count) ) )
++   if(unlikely(!access_ok(buf, count) ) )
+       return -EFAULT;
+ 
+    return ProcFsHelper_write_logLevels(buf, count, app);
+@@ -588,7 +588,7 @@
+    unsigned long count, void* data)
+ {
+    // check user buffer
+-   if(unlikely(!access_ok(VERIFY_READ, buf, count) ) )
++   if(unlikely(!access_ok(buf, count) ) )
+       return -EFAULT;
+ 
+    return ProcFsHelper_write_logLevels(buf, count, (App*)data);
+Only in client_module_7/source/filesystem: ProcFs.c.orig
+Only in client_module_7/source/filesystem: ProcFs.c.rej
+diff -ru -X diff-ignore orig/source/os/OsCompat.c client_module_7/source/os/OsCompat.c
+--- orig/source/os/OsCompat.c	2020-04-15 15:06:51.485285385 +0100
++++ client_module_7/source/os/OsCompat.c	2020-04-15 17:13:55.715191650 +0100
+@@ -331,7 +331,7 @@
+ 
+ 		if (!list_empty(&dentry->d_subdirs)) {
+ 			spin_unlock(&this_parent->d_lock);
+-			spin_release(&dentry->d_lock.dep_map, 1, _RET_IP_);
++			spin_release(&dentry->d_lock.dep_map, _RET_IP_);
+ 			this_parent = dentry;
+ 			spin_acquire(&this_parent->d_lock.dep_map, 0, 1, _RET_IP_);
+ 			goto repeat;
